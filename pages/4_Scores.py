@@ -5,46 +5,16 @@ Chạy:
 streamlit run scores.py
 """
 
-import sqlite3
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-
-DB_PATH = "data/lms.db"
-
-# =========================
-# DATABASE
-# =========================
-def get_connection():
-    Path("data").mkdir(exist_ok=True)
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
+from database import repository as repo
 
 def create_scores_table():
-    try:
-        conn = get_connection()
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS scores(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            math_score REAL,
-            literature_score REAL,
-            english_score REAL,
-            average_score REAL,
-            rank_level TEXT,
-            semester TEXT,
-            school_year TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(student_id,semester,school_year)
-        )
-        """)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        st.error(f"Lỗi tạo bảng: {e}")
+    # No local SQLite setup is needed when using Supabase.
+    return
 
 
 def calculate_average(m, l, e):
@@ -61,44 +31,28 @@ def calculate_rank(avg):
 
 def get_students():
     try:
-        conn = get_connection()
-        df = pd.read_sql("""
-        SELECT *
-        FROM students
-        ORDER BY class_name, full_name
-        """, conn)
-        conn.close()
-        return df
-    except:
+        data = repo.get_students()
+        if not data:
+            return pd.DataFrame(columns=["id", "student_code", "full_name", "class_name", "birth_date", "status"])
+        return pd.DataFrame(data)
+    except Exception:
         return pd.DataFrame()
 
 
 def save_score(student_id, math, lit, eng, semester, school_year):
     try:
-        conn = get_connection()
         avg = calculate_average(math, lit, eng)
         rank = calculate_rank(avg)
-
-        conn.execute("""
-        INSERT INTO scores(
-            student_id, math_score, literature_score,
-            english_score, average_score,
-            rank_level, semester, school_year
+        repo.save_score(
+            student_id,
+            math,
+            lit,
+            eng,
+            avg,
+            rank,
+            semester,
+            school_year
         )
-        VALUES(?,?,?,?,?,?,?,?)
-        ON CONFLICT(student_id,semester,school_year)
-        DO UPDATE SET
-            math_score=excluded.math_score,
-            literature_score=excluded.literature_score,
-            english_score=excluded.english_score,
-            average_score=excluded.average_score,
-            rank_level=excluded.rank_level
-        """, (
-            student_id, math, lit, eng,
-            avg, rank, semester, school_year
-        ))
-        conn.commit()
-        conn.close()
         return True
     except Exception as e:
         st.error(e)
@@ -107,68 +61,100 @@ def save_score(student_id, math, lit, eng, semester, school_year):
 
 def get_scores():
     try:
-        conn = get_connection()
-        df = pd.read_sql("""
-        SELECT
-            s.id,
-            st.student_code,
-            st.full_name,
-            st.class_name,
-            s.math_score,
-            s.literature_score,
-            s.english_score,
-            s.average_score,
-            s.rank_level,
-            s.semester,
-            s.school_year,
-            s.student_id
-        FROM scores s
-        INNER JOIN students st
-        ON st.id=s.student_id
-        """, conn)
-        conn.close()
-        return df
-    except:
-        return pd.DataFrame()
+        scores_data = repo.get_scores()
+        students_data = repo.get_students()
+
+        if not scores_data:
+            return pd.DataFrame(
+                columns=[
+                    "id",
+                    "student_code",
+                    "full_name",
+                    "class_name",
+                    "math_score",
+                    "literature_score",
+                    "english_score",
+                    "average_score",
+                    "rank_level",
+                    "semester",
+                    "school_year",
+                    "student_id"
+                ]
+            )
+
+        scores_df = pd.DataFrame(scores_data)
+        students_df = pd.DataFrame(students_data) if students_data else pd.DataFrame(
+            columns=["id", "student_code", "full_name", "class_name"]
+        )
+
+        merged = scores_df.merge(
+            students_df[["id", "student_code", "full_name", "class_name"]],
+            left_on="student_id",
+            right_on="id",
+            how="left",
+            suffixes=("", "_student")
+        )
+        merged["student_code"] = merged["student_code"].fillna(merged["student_code_student"])
+        merged["full_name"] = merged["full_name"].fillna(merged["full_name_student"])
+        merged["class_name"] = merged["class_name"].fillna(merged["class_name_student"])
+
+        return merged[
+            [
+                "id",
+                "student_code",
+                "full_name",
+                "class_name",
+                "math_score",
+                "literature_score",
+                "english_score",
+                "average_score",
+                "rank_level",
+                "semester",
+                "school_year",
+                "student_id"
+            ]
+        ]
+    except Exception:
+        return pd.DataFrame(
+            columns=[
+                "id",
+                "student_code",
+                "full_name",
+                "class_name",
+                "math_score",
+                "literature_score",
+                "english_score",
+                "average_score",
+                "rank_level",
+                "semester",
+                "school_year",
+                "student_id"
+            ]
+        )
 
 
 def update_score(score_id, math, lit, eng, semester, school_year):
     try:
-        conn = get_connection()
-
         avg = calculate_average(math, lit, eng)
         rank = calculate_rank(avg)
 
-        conn.execute("""
-        UPDATE scores
-        SET math_score=?,
-            literature_score=?,
-            english_score=?,
-            average_score=?,
-            rank_level=?,
-            semester=?,
-            school_year=?
-        WHERE id=?
-        """, (
-            math, lit, eng,
-            avg, rank,
-            semester, school_year,
-            score_id
-        ))
-
-        conn.commit()
-        conn.close()
-
+        repo.update_score(
+            score_id,
+            math,
+            lit,
+            eng,
+            avg,
+            rank,
+            semester,
+            school_year
+        )
     except Exception as e:
         st.error(e)
 
 
 def delete_score(score_id):
     try:
-        conn = get_connection()
-        conn.execute("DELETE FROM scores WHERE id=?", (score_id,))
-        conn.commit()
-        conn.close()
+        repo.delete_score(score_id)
     except Exception as e:
         st.error(e)
 

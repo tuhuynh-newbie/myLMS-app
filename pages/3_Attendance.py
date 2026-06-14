@@ -1,131 +1,82 @@
 
-import sqlite3
 from datetime import date
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+from database import repository as repo
 
-DB_PATH = "data/lms.db"
 
 st.set_page_config(page_title="Quản lý điểm danh", page_icon="📋", layout="wide")
 
 
-def get_connection():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
-def create_table():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            attendance_date TEXT,
-            attendance_status TEXT,
-            note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique
-        ON attendance(student_id, attendance_date)
-        """)
-        conn.commit()
-        conn.close()
-    except sqlite3.Error as e:
-        st.error(f"Lỗi DB: {e}")
-
-
 def get_students(class_name=None):
-    conn = get_connection()
-    q = "SELECT * FROM students WHERE status='Đang học'"
-    params = []
-    if class_name:
-        q += " AND class_name=?"
-        params.append(class_name)
-    df = pd.read_sql_query(q, conn, params=params)
-    conn.close()
-    return df
+    data = repo.get_students(class_name=class_name, status="Đang học")
+    return pd.DataFrame(data)
 
 
 def get_classes():
-    conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT DISTINCT class_name
-        FROM students
-        WHERE status='Đang học'
-        ORDER BY class_name
-    """, conn)
-    conn.close()
-    return df["class_name"].tolist()
+    return repo.get_classes()
 
 
 def load_attendance(attendance_date):
-    conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT * FROM attendance
-        WHERE attendance_date=?
-    """, conn, params=[str(attendance_date)])
-    conn.close()
-    return df
+    data = repo.get_attendance(str(attendance_date))
+    return pd.DataFrame(data)
 
 
 def save_attendance(student_id, attendance_date, status, note):
     try:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-        INSERT INTO attendance(
-            student_id, attendance_date,
-            attendance_status, note
+        return repo.upsert_attendance(
+            student_id,
+            str(attendance_date),
+            status,
+            note
         )
-        VALUES(?,?,?,?)
-        ON CONFLICT(student_id, attendance_date)
-        DO UPDATE SET
-            attendance_status=excluded.attendance_status,
-            note=excluded.note
-        """, (student_id, str(attendance_date), status, note))
-        conn.commit()
-        conn.close()
-    except sqlite3.Error as e:
+    except Exception as e:
         st.error(f"Lỗi lưu dữ liệu: {e}")
+        return None
 
 
 def student_statistics(start_date, end_date):
-    conn = get_connection()
-    df = pd.read_sql_query("""
-        SELECT s.student_code,s.full_name,s.class_name,
-               a.attendance_status
-        FROM students s
-        LEFT JOIN attendance a
-        ON s.id=a.student_id
-        AND date(a.attendance_date) BETWEEN date(?) AND date(?)
-        WHERE s.status='Đang học'
-    """, conn, params=[str(start_date), str(end_date)])
-    conn.close()
+    students = get_students()
+    attendance = repo.get_attendance_range(str(start_date), str(end_date))
 
-    if df.empty:
+    if students.empty:
+        return pd.DataFrame()
+
+    if not attendance:
+        attendance_df = pd.DataFrame(columns=["student_id", "attendance_status"])
+    else:
+        attendance_df = pd.DataFrame(attendance)
+
+    merged = students.merge(
+        attendance_df,
+        left_on="id",
+        right_on="student_id",
+        how="left"
+    )
+
+    if merged.empty:
         return pd.DataFrame()
 
     result = []
-    for (code, name, cls), g in df.groupby(
-        ["student_code", "full_name", "class_name"]
-    ):
-        total = len(g[g["attendance_status"].notna()])
-        present = (g["attendance_status"] == "Present").sum()
-        excused = (g["attendance_status"] == "Excused").sum()
-        absent = (g["attendance_status"] == "Absent").sum()
+    grouped = merged.groupby(
+        ["student_code", "full_name", "class_name"], dropna=False
+    )
+
+    for (code, name, cls), group in grouped:
+        total = group["attendance_status"].notna().sum()
+        present = (group["attendance_status"] == "Present").sum()
+        excused = (group["attendance_status"] == "Excused").sum()
+        absent = (group["attendance_status"] == "Absent").sum()
         rate = round((present / total * 100), 2) if total else 0
 
         result.append({
             "Mã HS": code,
             "Họ tên": name,
             "Lớp": cls,
-            "Có mặt": present,
-            "Có phép": excused,
-            "Không phép": absent,
+            "Có mặt": int(present),
+            "Có phép": int(excused),
+            "Không phép": int(absent),
             "Chuyên cần %": rate
         })
 
@@ -133,28 +84,48 @@ def student_statistics(start_date, end_date):
 
 
 def class_statistics(start_date, end_date):
-    conn = get_connection()
+    students = get_students()
+    attendance = repo.get_attendance_range(str(start_date), str(end_date))
 
-    students = pd.read_sql_query("""
-    SELECT class_name, COUNT(*) total_students
-    FROM students
-    WHERE status='Đang học'
-    GROUP BY class_name
-    """, conn)
+    if students.empty:
+        return pd.DataFrame(
+            columns=[
+                "class_name",
+                "total_students",
+                "total_attendance",
+                "present_count",
+                "attendance_rate"
+            ]
+        )
 
-    attendance = pd.read_sql_query("""
-    SELECT s.class_name,
-           COUNT(*) total_attendance,
-           SUM(CASE WHEN attendance_status='Present' THEN 1 ELSE 0 END) present_count
-    FROM attendance a
-    JOIN students s ON a.student_id=s.id
-    WHERE date(a.attendance_date) BETWEEN date(?) AND date(?)
-    GROUP BY s.class_name
-    """, conn, params=[str(start_date), str(end_date)])
+    class_counts = (
+        students.groupby("class_name", dropna=False)
+        .size()
+        .reset_index(name="total_students")
+    )
 
-    conn.close()
+    if not attendance:
+        attendance_df = pd.DataFrame(columns=["student_id", "attendance_status"])
+    else:
+        attendance_df = pd.DataFrame(attendance)
 
-    df = students.merge(attendance, on="class_name", how="left").fillna(0)
+    attendance_stats = (
+        attendance_df
+        .merge(
+            students[["id", "class_name"]],
+            left_on="student_id",
+            right_on="id",
+            how="left"
+        )
+        .groupby("class_name", dropna=False)
+        .agg(
+            total_attendance=("attendance_status", "size"),
+            present_count=("attendance_status", lambda x: (x == "Present").sum())
+        )
+        .reset_index()
+    )
+
+    df = class_counts.merge(attendance_stats, on="class_name", how="left").fillna(0)
     df["attendance_rate"] = df.apply(
         lambda r: round(r["present_count"] / r["total_attendance"] * 100, 2)
         if r["total_attendance"] > 0 else 0,
@@ -164,32 +135,22 @@ def class_statistics(start_date, end_date):
 
 
 def today_kpi():
-    conn = get_connection()
-
-    total_students = pd.read_sql_query(
-        "SELECT COUNT(*) c FROM students WHERE status='Đang học'", conn
-    )["c"][0]
+    students = get_students()
+    total_students = len(students)
 
     today = str(date.today())
+    attendance = repo.get_attendance(today)
+    attendance_df = pd.DataFrame(attendance)
 
-    df = pd.read_sql_query("""
-    SELECT attendance_status
-    FROM attendance
-    WHERE attendance_date=?
-    """, conn, params=[today])
-
-    conn.close()
-
-    checked = len(df)
-    present = (df["attendance_status"] == "Present").sum() if not df.empty else 0
-    absent = len(df[df["attendance_status"].isin(["Absent", "Excused"])]) if not df.empty else 0
+    checked = len(attendance_df)
+    present = (attendance_df["attendance_status"] == "Present").sum() if not attendance_df.empty else 0
+    absent = len(attendance_df[attendance_df["attendance_status"].isin(["Absent", "Excused"])]) if not attendance_df.empty else 0
     rate = round(present / checked * 100, 2) if checked else 0
 
     return total_students, checked, rate, absent
 
 
 def main():
-    create_table()
 
     st.title("📋 Quản lý điểm danh")
 

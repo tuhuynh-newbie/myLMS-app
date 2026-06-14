@@ -1,29 +1,12 @@
+"""
+2_Students.py — Quản lý học sinh
+Chạy: streamlit run 2_Students.py
+"""
+
+# ===========================================================================
+# CẤU HÌNH TRANG — phải là lệnh Streamlit ĐẦU TIÊN
+# ===========================================================================
 import streamlit as st
-
-st.title("Quản lý học sinh")
-# students.py
-# ==========================================================
-# MODULE QUẢN LÝ HỌC SINH - STREAMLIT + SQLITE
-#
-# Chức năng:
-# 1. Xem danh sách học sinh
-# 2. Thêm học sinh
-# 3. Tìm kiếm học sinh
-# 4. Sửa học sinh
-# 5. Xóa học sinh
-#
-# Database:
-# data/lms.db
-# ==========================================================
-
-import streamlit as st
-import sqlite3
-import pandas as pd
-from datetime import date
-
-# ==========================================================
-# CẤU HÌNH TRANG
-# ==========================================================
 
 st.set_page_config(
     page_title="Quản lý học sinh",
@@ -31,439 +14,221 @@ st.set_page_config(
     layout="wide"
 )
 
-DB_PATH = "data/lms.db"
+# ===========================================================================
+# IMPORTS
+# ===========================================================================
+import logging
+from datetime import date
 
+import pandas as pd
 
-# ==========================================================
-# KẾT NỐI DATABASE
-# ==========================================================
-def create_connection():
-    """
-    Tạo kết nối tới SQLite
-    """
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    return conn
+from database import repository as repo
 
+logger = logging.getLogger(__name__)
 
-# ==========================================================
-# TẠO BẢNG NẾU CHƯA TỒN TẠI
-# ==========================================================
-def create_table():
-    conn = create_connection()
-    cursor = conn.cursor()
+# ===========================================================================
+# DATA LAYER WRAPPERS
+# ===========================================================================
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_code TEXT UNIQUE,
-            full_name TEXT,
-            class_name TEXT,
-            birth_date TEXT,
-            status TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-
-# ==========================================================
-# ĐỌC DANH SÁCH HỌC SINH
-# ==========================================================
-def load_students():
-    """
-    Đọc toàn bộ học sinh từ SQLite
-    và trả về DataFrame
-    """
-    conn = create_connection()
-
-    query = """
-    SELECT *
-    FROM students
-    ORDER BY id DESC
-    """
-
-    df = pd.read_sql_query(query, conn)
-
-    conn.close()
-
-    return df
-
-
-# ==========================================================
-# THÊM HỌC SINH
-# ==========================================================
-def add_student(student_code,
-                full_name,
-                class_name,
-                birth_date,
-                status):
-    """
-    Thêm học sinh mới
-    """
-
-    if not full_name.strip():
-        st.error("Họ tên không được để trống.")
-        return
-
-    conn = create_connection()
-    cursor = conn.cursor()
-
+def load_students() -> pd.DataFrame:
+    """Lấy toàn bộ danh sách học sinh, trả về DataFrame."""
     try:
-        cursor.execute("""
-            INSERT INTO students
-            (
-                student_code,
-                full_name,
-                class_name,
-                birth_date,
-                status
+        data = repo.get_students()
+        if not data:
+            return pd.DataFrame(
+                columns=["id", "student_code", "full_name", "class_name", "birth_date", "status"]
             )
-            VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            student_code,
-            full_name,
-            class_name,
-            birth_date,
-            status
-        ))
-
-        conn.commit()
-
-        st.success("✅ Thêm học sinh thành công!")
-
-    except sqlite3.IntegrityError:
-        st.error("❌ Mã học sinh đã tồn tại.")
-
+        return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Lỗi: {e}")
-
-    finally:
-        conn.close()
-
-
-# ==========================================================
-# CẬP NHẬT HỌC SINH
-# ==========================================================
-def update_student(student_id,
-                   student_code,
-                   full_name,
-                   class_name,
-                   birth_date,
-                   status):
-
-    if not full_name.strip():
-        st.error("Họ tên không được để trống.")
-        return
-
-    conn = create_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("""
-            UPDATE students
-            SET
-                student_code = ?,
-                full_name = ?,
-                class_name = ?,
-                birth_date = ?,
-                status = ?
-            WHERE id = ?
-        """,
-        (
-            student_code,
-            full_name,
-            class_name,
-            birth_date,
-            status,
-            student_id
-        ))
-
-        conn.commit()
-
-        st.success("✅ Cập nhật thành công!")
-
-    except sqlite3.IntegrityError:
-        st.error("❌ Mã học sinh đã tồn tại.")
-
-    except Exception as e:
-        st.error(f"Lỗi: {e}")
-
-    finally:
-        conn.close()
-
-
-# ==========================================================
-# XÓA HỌC SINH
-# ==========================================================
-def delete_student(student_id):
-
-    conn = create_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute(
-            "DELETE FROM students WHERE id = ?",
-            (student_id,)
+        st.error(f"❌ Không thể tải danh sách học sinh: {e}")
+        logger.exception("load_students thất bại")
+        return pd.DataFrame(
+            columns=["id", "student_code", "full_name", "class_name", "birth_date", "status"]
         )
 
-        conn.commit()
 
-        st.success("✅ Xóa học sinh thành công!")
-
+def add_student(
+    student_code: str,
+    full_name: str,
+    class_name: str,
+    birth_date: str,
+    status: str,
+) -> bool:
+    """Thêm học sinh mới. Trả về True nếu thành công."""
+    try:
+        repo.create_student(student_code, full_name, class_name, birth_date, status)
+        st.success("✅ Thêm học sinh thành công!")
+        return True
+    except ValueError as e:
+        st.error(f"❌ Dữ liệu không hợp lệ: {e}")
     except Exception as e:
-        st.error(f"Lỗi: {e}")
-
-    finally:
-        conn.close()
-
-
-# ==========================================================
-# KHỞI TẠO DATABASE
-# ==========================================================
-create_table()
+        msg = str(e).lower()
+        if "unique" in msg or "duplicate" in msg:
+            st.error("❌ Mã học sinh đã tồn tại. Vui lòng dùng mã khác.")
+        else:
+            st.error(f"❌ Lỗi: {e}")
+        logger.exception("add_student thất bại")
+    return False
 
 
-# ==========================================================
-# TIÊU ĐỀ
-# ==========================================================
+def edit_student(
+    student_id: int,
+    student_code: str,
+    full_name: str,
+    class_name: str,
+    birth_date: str,
+    status: str,
+) -> bool:
+    """Cập nhật thông tin học sinh. Trả về True nếu thành công."""
+    try:
+        repo.update_student(student_id, student_code, full_name, class_name, birth_date, status)
+        st.success("✅ Cập nhật thành công!")
+        return True
+    except ValueError as e:
+        st.error(f"❌ Dữ liệu không hợp lệ: {e}")
+    except Exception as e:
+        msg = str(e).lower()
+        if "unique" in msg or "duplicate" in msg:
+            st.error("❌ Mã học sinh đã tồn tại.")
+        else:
+            st.error(f"❌ Lỗi: {e}")
+        logger.exception("edit_student thất bại id=%s", student_id)
+    return False
+
+
+def remove_student(student_id: int) -> bool:
+    """Xóa học sinh theo ID. Trả về True nếu thành công."""
+    try:
+        repo.delete_student(student_id)
+        st.success("✅ Xóa học sinh thành công!")
+        return True
+    except Exception as e:
+        st.error(f"❌ Lỗi khi xóa: {e}")
+        logger.exception("remove_student thất bại id=%s", student_id)
+    return False
+
+
+# ===========================================================================
+# UI
+# ===========================================================================
+
 st.title("🎓 Quản lý học sinh")
 
-# ==========================================================
-# TABS
-# ==========================================================
-tab1, tab2, tab3, tab4 = st.tabs(
-    [
-        "📋 Danh sách học sinh",
-        "➕ Thêm học sinh",
-        "✏️ Sửa học sinh",
-        "🗑️ Xóa học sinh"
-    ]
-)
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📋 Danh sách",
+    "➕ Thêm học sinh",
+    "✏️ Sửa học sinh",
+    "🗑️ Xóa học sinh",
+])
 
-# ==========================================================
-# TAB 1 - DANH SÁCH HỌC SINH
-# ==========================================================
+# ---------------------------------------------------------------------------
+# TAB 1 — DANH SÁCH
+# ---------------------------------------------------------------------------
 with tab1:
-
     st.subheader("Danh sách học sinh")
 
     df = load_students()
 
     col1, col2 = st.columns(2)
+    search_name = col1.text_input("🔍 Tìm theo họ tên")
+    search_code = col2.text_input("🔍 Tìm theo mã học sinh")
 
-    with col1:
-        search_name = st.text_input(
-            "Tìm theo họ tên"
-        )
-
-    with col2:
-        search_code = st.text_input(
-            "Tìm theo mã học sinh"
-        )
-
-    filtered_df = df.copy()
-
-    # Lọc theo tên
+    filtered = df.copy()
     if search_name:
-        filtered_df = filtered_df[
-            filtered_df["full_name"]
-            .str.contains(
-                search_name,
-                case=False,
-                na=False
-            )
+        filtered = filtered[
+            filtered["full_name"].str.contains(search_name, case=False, na=False)
         ]
-
-    # Lọc theo mã học sinh
     if search_code:
-        filtered_df = filtered_df[
-            filtered_df["student_code"]
-            .str.contains(
-                search_code,
-                case=False,
-                na=False
-            )
+        filtered = filtered[
+            filtered["student_code"].str.contains(search_code, case=False, na=False)
         ]
 
-    st.dataframe(
-        filtered_df,
-        use_container_width=True
-    )
+    st.dataframe(filtered, use_container_width=True, hide_index=True)
+    st.info(f"Tổng: **{len(filtered)}** học sinh")
 
-    st.info(
-        f"Tổng số học sinh: {len(filtered_df)}"
-    )
-
-
-# ==========================================================
-# TAB 2 - THÊM HỌC SINH
-# ==========================================================
+# ---------------------------------------------------------------------------
+# TAB 2 — THÊM HỌC SINH
+# ---------------------------------------------------------------------------
 with tab2:
+    st.subheader("Thêm học sinh mới")
 
-    st.subheader("Thêm học sinh")
+    with st.form("form_add_student", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        new_code = c1.text_input("Mã học sinh *")
+        new_name = c2.text_input("Họ và tên *")
 
-    with st.form("add_student_form"):
+        c3, c4 = st.columns(2)
+        new_class = c3.text_input("Lớp *")
+        new_birth = c4.date_input("Ngày sinh", value=date(2015, 1, 1))
 
-        student_code = st.text_input(
-            "Mã học sinh"
-        )
+        new_status = st.selectbox("Trạng thái", ["Đang học", "Nghỉ học"])
 
-        full_name = st.text_input(
-            "Họ tên"
-        )
+        if st.form_submit_button("💾 Lưu học sinh", use_container_width=True):
+            if add_student(new_code, new_name, new_class, str(new_birth), new_status):
+                st.rerun()
 
-        class_name = st.text_input(
-            "Lớp"
-        )
-
-        birth_date = st.date_input(
-            "Ngày sinh",
-            value=date(2015, 1, 1)
-        )
-
-        status = st.selectbox(
-            "Trạng thái",
-            [
-                "Đang học",
-                "Nghỉ học"
-            ]
-        )
-
-        submitted = st.form_submit_button(
-            "Lưu học sinh"
-        )
-
-        if submitted:
-
-            add_student(
-                student_code,
-                full_name,
-                class_name,
-                str(birth_date),
-                status
-            )
-
-
-# ==========================================================
-# TAB 3 - SỬA HỌC SINH
-# ==========================================================
+# ---------------------------------------------------------------------------
+# TAB 3 — SỬA HỌC SINH
+# ---------------------------------------------------------------------------
 with tab3:
+    st.subheader("Sửa thông tin học sinh")
 
-    st.subheader("Sửa học sinh")
+    df_edit = load_students()
 
-    df = load_students()
-
-    if not df.empty:
-
-        options = {
-            f"{row['student_code']} - {row['full_name']}":
-            row["id"]
-            for _, row in df.iterrows()
+    if df_edit.empty:
+        st.warning("Chưa có học sinh nào.")
+    else:
+        options_edit = {
+            f"{row['student_code']} — {row['full_name']}": int(row["id"])
+            for _, row in df_edit.iterrows()
         }
+        selected_edit = st.selectbox("Chọn học sinh", list(options_edit.keys()), key="sel_edit")
+        sid_edit = options_edit[selected_edit]
+        student = df_edit[df_edit["id"] == sid_edit].iloc[0]
 
-        selected = st.selectbox(
-            "Chọn học sinh",
-            list(options.keys())
-        )
+        with st.form("form_edit_student"):
+            c1, c2 = st.columns(2)
+            e_code = c1.text_input("Mã học sinh", value=student["student_code"])
+            e_name = c2.text_input("Họ và tên", value=student["full_name"])
 
-        student_id = options[selected]
+            c3, c4 = st.columns(2)
+            e_class = c3.text_input("Lớp", value=student["class_name"])
+            e_birth = c4.text_input("Ngày sinh (YYYY-MM-DD)", value=str(student["birth_date"]))
 
-        student = df[
-            df["id"] == student_id
-        ].iloc[0]
-
-        code_edit = st.text_input(
-            "Mã học sinh",
-            value=student["student_code"]
-        )
-
-        name_edit = st.text_input(
-            "Họ tên",
-            value=student["full_name"]
-        )
-
-        class_edit = st.text_input(
-            "Lớp",
-            value=student["class_name"]
-        )
-
-        birth_edit = st.text_input(
-            "Ngày sinh",
-            value=student["birth_date"]
-        )
-
-        status_edit = st.selectbox(
-            "Trạng thái",
-            ["Đang học", "Nghỉ học"],
-            index=0
-            if student["status"] == "Đang học"
-            else 1
-        )
-
-        if st.button("Cập nhật"):
-
-            update_student(
-                student_id,
-                code_edit,
-                name_edit,
-                class_edit,
-                birth_edit,
-                status_edit
+            e_status = st.selectbox(
+                "Trạng thái",
+                ["Đang học", "Nghỉ học"],
+                index=0 if student["status"] == "Đang học" else 1,
             )
 
-            st.rerun()
+            if st.form_submit_button("✏️ Cập nhật", use_container_width=True):
+                if edit_student(sid_edit, e_code, e_name, e_class, e_birth, e_status):
+                    st.rerun()
 
-    else:
-        st.warning(
-            "Chưa có học sinh nào."
-        )
-
-
-# ==========================================================
-# TAB 4 - XÓA HỌC SINH
-# ==========================================================
+# ---------------------------------------------------------------------------
+# TAB 4 — XÓA HỌC SINH
+# ---------------------------------------------------------------------------
 with tab4:
-
     st.subheader("Xóa học sinh")
 
-    df = load_students()
+    df_del = load_students()
 
-    if not df.empty:
-
-        options = {
-            f"{row['student_code']} - {row['full_name']}":
-            row["id"]
-            for _, row in df.iterrows()
-        }
-
-        selected = st.selectbox(
-            "Chọn học sinh cần xóa",
-            list(options.keys())
-        )
-
-        student_id = options[selected]
-
-        st.warning(
-            "Hành động này không thể hoàn tác."
-        )
-
-        confirm = st.checkbox(
-            "Tôi xác nhận muốn xóa"
-        )
-
-        if st.button("Xóa học sinh"):
-
-            if confirm:
-                delete_student(student_id)
-                st.rerun()
-            else:
-                st.error(
-                    "Vui lòng xác nhận trước khi xóa."
-                )
-
+    if df_del.empty:
+        st.warning("Không có dữ liệu học sinh.")
     else:
-        st.warning(
-            "Không có dữ liệu học sinh."
-        )
+        options_del = {
+            f"{row['student_code']} — {row['full_name']}": int(row["id"])
+            for _, row in df_del.iterrows()
+        }
+        selected_del = st.selectbox("Chọn học sinh cần xóa", list(options_del.keys()), key="sel_del")
+        sid_del = options_del[selected_del]
+
+        st.warning("⚠️ Hành động này **không thể hoàn tác**.")
+        confirm = st.checkbox("Tôi xác nhận muốn xóa học sinh này")
+
+        if st.button("🗑️ Xóa học sinh", use_container_width=True, type="primary"):
+            if not confirm:
+                st.error("Vui lòng tick xác nhận trước khi xóa.")
+            else:
+                if remove_student(sid_del):
+                    st.rerun()

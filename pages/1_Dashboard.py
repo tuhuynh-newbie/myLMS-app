@@ -1,8 +1,7 @@
 # dashboard.py
 
-import os
-import sqlite3
 import pandas as pd
+from database import repository as repo
 import streamlit as st
 import plotly.express as px
 
@@ -16,56 +15,20 @@ st.set_page_config(
     layout="wide"
 )
 
-DB_PATH = "data/lms.db"
-
-
-# =====================================================
-# KẾT NỐI DATABASE
-# =====================================================
-def create_connection():
-    """
-    Kết nối tới SQLite Database.
-    Trả về đối tượng connection.
-    """
-
-    if not os.path.exists(DB_PATH):
-        return None
-
-    conn = sqlite3.connect(DB_PATH)
-
-    return conn
-
-
-# =====================================================
-# LOAD DỮ LIỆU HỌC SINH
-# =====================================================
 def load_students():
     """
     Đọc toàn bộ dữ liệu học sinh từ database
     và trả về DataFrame Pandas.
     """
 
-    conn = create_connection()
-
-    if conn is None:
-        return None
-
     try:
-        query = """
-        SELECT *
-        FROM students
-        """
-
-        df = pd.read_sql_query(query, conn)
-
-        return df
-
+        data = repo.get_students()
+        if not data:
+            return pd.DataFrame(columns=["id", "student_code", "full_name", "class_name", "birth_date", "status"])
+        return pd.DataFrame(data)
     except Exception as e:
         st.error(f"Lỗi khi đọc dữ liệu: {e}")
-        return None
-
-    finally:
-        conn.close()
+        return pd.DataFrame()
 
 
 # =====================================================
@@ -205,13 +168,6 @@ def main():
     st.write(
         "Tổng quan hệ thống quản lý học sinh"
     )
-
-    # ---------------------------------------------
-    # KIỂM TRA DATABASE
-    # ---------------------------------------------
-    if not os.path.exists(DB_PATH):
-        st.error("Không tìm thấy database")
-        return
 
     # ---------------------------------------------
     # LOAD DỮ LIỆU
